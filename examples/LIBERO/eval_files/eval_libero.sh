@@ -1,17 +1,13 @@
 #!/bin/bash
-# === Paths (adapted for this cluster) ===
-STARVLA_DIR=/home/jye624/Projcets/starVLA
 
-cd ${STARVLA_DIR}
-# === Checkpoint ===
-CKPT=${STARVLA_DIR}/playground/Pretrained_models/StarVLA/Qwen3-VL-OFT-LIBERO-4in1/checkpoints/steps_50000_pytorch_model.pt
-
+cd /home/robot/yjw/starVLA
+conda activate starVLA
 
 ###########################################################################################
 # === Please modify the following paths according to your environment ===
-export LIBERO_HOME=/home/jye624/Projcets/LIBERO
+export LIBERO_HOME=/home/robot/yjw/LIBERO
 export LIBERO_CONFIG_PATH=${LIBERO_HOME}/libero
-export LIBERO_Python=/home/jye624/.conda/envs/libero/bin/python
+export LIBERO_Python=/home/robot/anaconda3/envs/libero/bin/python
 
 export PYTHONPATH=$PYTHONPATH:${LIBERO_HOME} # let eval_libero find the LIBERO tools
 export PYTHONPATH=$(pwd):${PYTHONPATH} # let LIBERO find the websocket tools from main repo
@@ -27,6 +23,8 @@ your_ckpt=${CKPT}
 
 
 # export DEBUG=true
+your_ckpt=./results/Checkpoints/1229_libero4in1_qwen3oft/checkpoints/steps_80000_pytorch_model.pt
+export DEBUG=true
 
 folder_name=$(echo "$your_ckpt" | awk -F'/' '{print $(NF-2)"_"$(NF-1)"_"$NF}')
 # === End of environment variable configuration ===

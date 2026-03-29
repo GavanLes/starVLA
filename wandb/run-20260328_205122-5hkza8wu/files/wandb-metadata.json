@@ -1,0 +1,15 @@
+{
+  "os": "Linux-6.8.0-106-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.10.20",
+  "startedAt": "2026-03-28T12:51:22.035068Z",
+  "program": "<stdin>",
+  "git": {
+    "remote": "https://github.com/starVLA/starVLA",
+    "commit": "c33807799cf4101593644cc866d495b53d7e3c5a"
+  },
+  "email": "761402180@qq.com",
+  "root": "/home/robot/yjw/starVLA",
+  "host": "robot-4090",
+  "executable": "/home/robot/anaconda3/envs/starVLA/bin/python",
+  "writerId": "gzxuzi39wztqzlxxmv5feaudspscngi0"
+}

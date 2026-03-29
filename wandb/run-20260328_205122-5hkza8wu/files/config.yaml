@@ -1,0 +1,27 @@
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            gzxuzi39wztqzlxxmv5feaudspscngi0:
+                email: 761402180@qq.com
+                executable: /home/robot/anaconda3/envs/starVLA/bin/python
+                git:
+                    commit: c33807799cf4101593644cc866d495b53d7e3c5a
+                    remote: https://github.com/starVLA/starVLA
+                host: robot-4090
+                os: Linux-6.8.0-106-generic-x86_64-with-glibc2.35
+                program: <stdin>
+                python: CPython 3.10.20
+                root: /home/robot/yjw/starVLA
+                startedAt: "2026-03-28T12:51:22.035068Z"
+                writerId: gzxuzi39wztqzlxxmv5feaudspscngi0
+        m: []
+        python_version: 3.10.20
+        t:
+            "3":
+                - 2
+                - 13
+            "4": 3.10.20
+            "5": 0.25.1
+            "12": 0.25.1
+            "13": linux-x86_64
