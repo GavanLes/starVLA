@@ -67,4 +67,4 @@ accelerate launch \
   --run_root_dir ${run_root_dir} \
   --run_id ${run_id} \
   --wandb_project starvla \
-  --wandb_entity 761402180-ustb \
+  --wandb_entity 761402180-ustb \ 

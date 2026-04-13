@@ -19,7 +19,7 @@ export PYOPENGL_PLATFORM=egl
 host="127.0.0.1"
 base_port=6694
 unnorm_key="franka"
-your_ckpt=./results/Checkpoints/1229_libero4in1_qwen3oft/final_model/pytorch_model.pt
+your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_libero4in1/checkpoints/steps_50000_pytorch_model.pt
 export DEBUG=true
 
 folder_name=$(echo "$your_ckpt" | awk -F'/' '{print $(NF-2)"_"$(NF-1)"_"$NF}')
