@@ -86,7 +86,7 @@ class SmolVLA(baseframework):
         self.action_model = SmolVLAFlowMatching(config=self.config)
 
         self.future_action_window_size = config.framework.action_model.future_action_window_size
-        self.past_action_window_size = config.framework.action_model.past_action_window_size
+        self.past_action_window_size = getattr(config.framework.action_model, "past_action_window_size", 0)
         self.chunk_len = self.past_action_window_size + 1 + self.future_action_window_size
 
 
@@ -282,6 +282,9 @@ if __name__ == "__main__":
     
 
     model = SmolVLA(cfg)
+    print(model)
+    print("\n[SmolVLA action model]\n")
+    print(model.action_model)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()

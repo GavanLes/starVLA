@@ -202,7 +202,18 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
     ):
         super().__init__()
         action_config = global_config.framework.action_model
-        diffusion_model_cfg = action_config.diffusion_model_cfg
+        diffusion_model_cfg = getattr(action_config, "diffusion_model_cfg", None) or {}
+        diffusion_model_cfg = dict(diffusion_model_cfg)
+
+        action_config.add_pos_embed = getattr(action_config, "add_pos_embed", True)
+        action_config.max_seq_len = getattr(action_config, "max_seq_len", 1024)
+        action_config.num_target_vision_tokens = getattr(action_config, "num_target_vision_tokens", 32)
+        action_config.noise_beta_alpha = getattr(action_config, "noise_beta_alpha", 1.5)
+        action_config.noise_beta_beta = getattr(action_config, "noise_beta_beta", 1.0)
+        action_config.noise_s = getattr(action_config, "noise_s", 0.999)
+        action_config.num_timestep_buckets = getattr(action_config, "num_timestep_buckets", 1000)
+        action_config.num_inference_timesteps = getattr(action_config, "num_inference_timesteps", 4) or 4
+        action_config.state_dim = getattr(action_config, "state_dim", None)
 
         # 更新 DiTConfig 到 diffusion_model_cfg
         DiTConfig["num_layers"] = global_config.framework.qwenvl.num_vl_layers
@@ -210,7 +221,7 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         DiTConfig["num_attention_heads"] = DiTConfig["input_embedding_dim"] // DiTConfig["attention_head_dim"]
         diffusion_model_cfg.update(DiTConfig)
         # diffusion_model_cfg["interleave_self_attention"] = False
-        diffusion_model_cfg.cross_attention_dim = DiTConfig[
+        diffusion_model_cfg["cross_attention_dim"] = DiTConfig[
             "input_embedding_dim"
         ]  # should match vl embedding dim, but for some case we might want to change it for cross + self attention
         self.input_embedding_dim = global_config.framework.qwenvl.vl_hidden_dim
