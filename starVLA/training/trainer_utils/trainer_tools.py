@@ -92,7 +92,7 @@ def build_param_lr_groups(model, cfg):
             for attr in module_name.split("."):
                 module = getattr(module, attr)
             # filter out frozen parameters
-            params = [p for p in module.parameters() if id(p) not in frozen_params]
+            params = [p for p in module.parameters() if id(p) not in frozen_params and p.requires_grad]
             if params:  # only add param group if there are trainable parameters
                 param_groups.append({"params": params, "lr": lr, "name": module_name})
                 used_params.update(id(p) for p in params)
@@ -100,7 +100,9 @@ def build_param_lr_groups(model, cfg):
             ReferenceError(f"⚠️ module path `{module_name}` not found in vla")
 
     # assign base learning rate to the remaining unused parameters (exclude frozen ones)
-    other_params = [p for p in model.parameters() if id(p) not in used_params and id(p) not in frozen_params]
+    other_params = [
+        p for p in model.parameters() if id(p) not in used_params and id(p) not in frozen_params and p.requires_grad
+    ]
     if other_params:
         param_groups.append({"params": other_params, "lr": base_lr, "name": "base"})
 
@@ -197,12 +199,29 @@ class TrainerUtils:
         """
         if dist.get_rank() != 0:
             return
-        print("📊 model parameter statistics:")
+        print("=" * 80)
+        print("[TRAINABLE PARAM SUMMARY]")
+        print("=" * 80)
         num_params = sum(p.numel() for p in model.parameters())
         num_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(
-            f"# Parameters (in millions): {num_params / 10**6:.3f} Total, {num_trainable_params / 10**6:.3f} Trainable"
+            f"TOTAL(M): {num_params / 10**6:.3f} | TRAINABLE(M): {num_trainable_params / 10**6:.3f}"
         )
+
+        # Hard-check helper: show trainable/total params for each top-level child module.
+        print("[TOP-LEVEL BREAKDOWN (M)]")
+        highlighted_modules = {"smolvlm_interface", "action_model"}
+        for module_name, submodule in model.named_children():
+            sub_total = sum(p.numel() for p in submodule.parameters())
+            sub_trainable = sum(p.numel() for p in submodule.parameters() if p.requires_grad)
+            line = f"  - {module_name}: total={sub_total / 10**6:.3f}, trainable={sub_trainable / 10**6:.3f}"
+            if module_name in highlighted_modules:
+                print(f">>> {line}")
+            else:
+                print(line)
+
+        print("=" * 80)
+
         return num_params, num_trainable_params
 
     @staticmethod

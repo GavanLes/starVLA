@@ -6,7 +6,7 @@ export PYTHONPATH=$(pwd):${PYTHONPATH}
 
 # ================== SmolVLA Policy Server ==================
 star_vla_python=/home/robot/anaconda3/envs/starVLA/bin/python
-your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_libero4in1/checkpoints/steps_50000_pytorch_model.pt
+your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_libero_stage2/checkpoints/steps_50000_pytorch_model.pt
 gpu_id=0
 port=5694
 

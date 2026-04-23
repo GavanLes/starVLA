@@ -11,23 +11,23 @@ set -euo pipefail
 
 ###########################################################################################
 # === Please modify the following paths according to your environment ===
-Framework_name=SmolVLA
-freeze_module_list=''
-base_vlm=playground/Pretrained_models/SmolVLM2-500M-Video-Instruct
-config_yaml=./examples/LIBERO/train_files/starvla_cotrain_libero.yaml
+
+#Framework_name=SmolVLA
+#freeze_module_list=''
+#base_vlm=playground/Pretrained_models/SmolVLM2-500M-Video-Instruct
+config_yaml=./examples/LIBERO/train_files/smolvla_libero_stage2.yaml
 libero_data_root=playground/Datasets/LEROBOT_LIBERO_DATA/libero
 data_mix=libero_all
 run_root_dir=./results/Checkpoints
-run_id=smolvla_libero4in1
+run_id=smolvla_libero_stage2
 # VLM training switches
-# false = do not freeze the whole VLM
 # true  = freeze the whole VLM and only train the action expert
-train_expert_only=false
+train_expert_only=true
 # true  = freeze the vision encoder and projector, keep the rest of the VLM trainable
 freeze_vision_encoder=true
 # Memory controls for 24GB GPUs
 vlm_num_vl_layers=16
-vla_per_device_batch_size=2
+vla_per_device_batch_size=1
 # === End of environment variable configuration ===
 ###########################################################################################
 
@@ -40,21 +40,22 @@ accelerate launch \
   --num_processes 1 \
   starVLA/training/train_starvla.py \
   --config_yaml ${config_yaml} \
-  --framework.name ${Framework_name} \
-  --framework.qwenvl.base_vlm ${base_vlm} \
-  --framework.qwenvl.num_vl_layers ${vlm_num_vl_layers} \
-  --framework.train_expert_only ${train_expert_only} \
-  --framework.freeze_vision_encoder ${freeze_vision_encoder} \
   --datasets.vla_data.data_root_dir ${libero_data_root} \
   --datasets.vla_data.data_mix ${data_mix} \
-  --datasets.vla_data.per_device_batch_size ${vla_per_device_batch_size} \
-  --trainer.freeze_modules ${freeze_module_list} \
-  --trainer.repeated_diffusion_steps 1 \
-  --trainer.max_train_steps 80000 \
-  --trainer.save_interval 10000 \
-  --trainer.logging_frequency 100 \
-  --trainer.eval_interval 100 \
-  --run_root_dir ${run_root_dir} \
-  --run_id ${run_id} \
-  --wandb_project starvla \
-  --wandb_entity 761402180-ustb
+  # --framework.name ${Framework_name} \
+  # --framework.qwenvl.base_vlm ${base_vlm} \
+  # --framework.qwenvl.num_vl_layers ${vlm_num_vl_layers} \
+  # --framework.train_expert_only ${train_expert_only} \
+  # --framework.freeze_vision_encoder ${freeze_vision_encoder} \
+
+  # --datasets.vla_data.per_device_batch_size ${vla_per_device_batch_size} \
+  # --trainer.freeze_modules ${freeze_module_list} \
+  # --trainer.repeated_diffusion_steps 8 \
+  # --trainer.max_train_steps 80000 \
+  # --trainer.save_interval 20000 \
+  # --trainer.logging_frequency 10 \
+  # --trainer.eval_interval 100 \
+  # --run_root_dir ${run_root_dir} \
+  # --run_id ${run_id} \
+  # --wandb_project starvla \
+  # --wandb_entity 761402180-ustb
