@@ -41,6 +41,7 @@ class Args:
     )
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
+    actions_per_chunk: int = 1  # Number of actions executed before refreshing observation
 
     #################################################################################################################
     # Utils
@@ -90,6 +91,7 @@ def eval_libero(args: Args) -> None:
         host=args.host,
         port=args.port,
         image_size=args.resize_size,
+        actions_per_chunk=args.actions_per_chunk,
     )
 
     # Start evaluation
@@ -160,6 +162,7 @@ def eval_libero(args: Args) -> None:
                 # align key with model API --> 这里给了两个图像 --> check training
                 example_dict = {
                     "image": [observation["observation.primary"][0], observation["observation.wrist_image"][0]],
+                    "state": observation["observation.state"][0],
                     "lang": observation["instruction"][0],
                 }
 

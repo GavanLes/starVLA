@@ -19,7 +19,7 @@ export PYOPENGL_PLATFORM=egl
 host="127.0.0.1"
 base_port=6694
 unnorm_key="franka"
-your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_libero_stage2/checkpoints/steps_50000_pytorch_model.pt
+your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_libero_stage2/checkpoints/steps_100000_pytorch_model.pt
 export DEBUG=true
 
 folder_name=$(echo "$your_ckpt" | awk -F'/' '{print $(NF-2)"_"$(NF-1)"_"$NF}')
@@ -32,6 +32,7 @@ mkdir -p ${LOG_DIR}
 
 task_suite_name=libero_goal
 num_trials_per_task=50
+actions_per_chunk=10
 video_out_path="results/${task_suite_name}/${folder_name}"
 
 
@@ -41,4 +42,5 @@ ${LIBERO_Python} ./examples/LIBERO/eval_files/eval_libero.py \
     --args.port $base_port \
     --args.task-suite-name "$task_suite_name" \
     --args.num-trials-per-task "$num_trials_per_task" \
+    --args.actions-per-chunk "$actions_per_chunk" \
     --args.video-out-path "$video_out_path"

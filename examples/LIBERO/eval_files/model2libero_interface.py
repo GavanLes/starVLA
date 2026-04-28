@@ -23,6 +23,7 @@ class ModelClient:
         image_size: list[int] = [224, 224],
         use_ddim: bool = True,
         num_ddim_steps: int = 10,
+        actions_per_chunk: int = 1,
         adaptive_ensemble_alpha=0.1,
         host="0.0.0.0",
         port=10095,
@@ -36,6 +37,7 @@ class ModelClient:
         print(f"*** policy_setup: {policy_setup}, unnorm_key: {unnorm_key} ***")
         self.use_ddim = use_ddim
         self.num_ddim_steps = num_ddim_steps
+        self.actions_per_chunk = max(1, int(actions_per_chunk))
         self.image_size = image_size
         self.horizon = horizon  # 0
         self.action_ensemble = action_ensemble
@@ -56,6 +58,10 @@ class ModelClient:
 
         self.action_norm_stats = self.get_action_stats(self.unnorm_key, policy_ckpt_path=policy_ckpt_path)
         self.action_chunk_size = self.get_action_chunk_size(policy_ckpt_path=policy_ckpt_path)
+        print(
+            f"*** action_chunk_size={self.action_chunk_size}, actions_per_chunk={self.actions_per_chunk} "
+            f"(obs refresh every {self.actions_per_chunk} step) ***"
+        )
 
     def _add_image_to_history(self, image: np.ndarray) -> None:
         self.image_history.append(image)
@@ -98,20 +104,29 @@ class ModelClient:
         }
 
         action_chunk_size = self.action_chunk_size
-        if step % action_chunk_size == 0:
+        if step % self.actions_per_chunk == 0:
             response = self.client.predict_action(vla_input)
+            if not isinstance(response, dict):
+                raise RuntimeError(f"Unexpected policy response type: {type(response)} -> {response}")
+
+            if response.get("ok") is False or "data" not in response:
+                raise RuntimeError(f"Policy inference failed, response={response}")
+
             try:
                 normalized_actions = response["data"]["normalized_actions"]  # B, chunk, D
-            except KeyError:
+            except KeyError as exc:
                 print(f"Response data: {response}")
-                raise KeyError(f"Key 'normalized_actions' not found in response data: {response['data'].keys()}")
+                raise KeyError(
+                    f"Key 'normalized_actions' not found in response data: {list(response.get('data', {}).keys())}"
+                ) from exc
 
             normalized_actions = normalized_actions[0]
             self.raw_actions = self.unnormalize_actions(
                 normalized_actions=normalized_actions, action_norm_stats=self.action_norm_stats
             )
 
-        raw_actions = self.raw_actions[step % action_chunk_size][None]
+        action_index = min(step % self.actions_per_chunk, action_chunk_size - 1)
+        raw_actions = self.raw_actions[action_index][None]
 
         raw_action = {
             "world_vector": np.array(raw_actions[0, :3]),

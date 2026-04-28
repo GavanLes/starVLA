@@ -17,7 +17,7 @@ framework:
   freeze_vision_encoder: false
   action_model:
     action_dim: 7
-    state_dim: 7
+    state_dim: 8
     future_action_window_size: 7
     action_horizon: 8
     past_action_window_size: 0
@@ -58,6 +58,7 @@ datasets:
     dataset_py: lerobot_datasets
     data_root_dir: playground/Datasets/LIBERO
     data_mix: libero_all
+    include_state: true
     action_type: delta_qpos
     sequential_step_sampling: false
     CoT_prompt: "Your task is {instruction}. To identify the key objects for your task. Locate their bounding boxes in [x1,y1,x2,y2] format."
@@ -70,9 +71,9 @@ datasets:
 
 trainer:
   epochs: 100
-  max_train_steps: 50000
+  max_train_steps: 100000
   num_warmup_steps: 3000
-  save_interval: 5000
+  save_interval: 10000
   eval_interval: 100
   learning_rate:
     base: 5.0e-06
