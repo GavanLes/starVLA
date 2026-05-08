@@ -19,12 +19,9 @@ config_yaml=./examples/LIBERO/train_files/smolvla_libero_stage2.yaml
 libero_data_root=playground/Datasets/LEROBOT_LIBERO_DATA/libero
 data_mix=libero_all
 run_root_dir=./results/Checkpoints
-run_id=smolvla_libero_stage2
+run_id=smolvla_libero_stage2_sa
 # VLM training switches
-# true  = freeze the whole VLM and only train the action expert
-train_expert_only=true
-# true  = freeze the vision encoder and projector, keep the rest of the VLM trainable
-freeze_vision_encoder=true
+
 # Memory controls for 24GB GPUs
 vlm_num_vl_layers=16
 vla_per_device_batch_size=1

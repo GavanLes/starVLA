@@ -1,4 +1,4 @@
-run_id: smolvla_libero_stage2
+run_id: smolvla_libero_stage2_sa
 run_root_dir: results/Checkpoints
 seed: 42
 trackers: [jsonl, wandb]
@@ -86,7 +86,7 @@ trainer:
   loss_scale:
     vla: 1.0
     vlm: 0.1
-  pretrained_checkpoint: ./results/Checkpoints/smolvla_libero_stage1/checkpoints/steps_2000_pytorch_model.pt
+  pretrained_checkpoint: ./results/Checkpoints/smolvla_libero_stage1_sa/checkpoints/steps_2000_pytorch_model.pt
   max_grad_norm: 1.0
   warmup_ratio: 0.1
   weight_decay: 0.0

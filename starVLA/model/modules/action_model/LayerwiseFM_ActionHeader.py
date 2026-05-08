@@ -216,16 +216,17 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         action_config.state_dim = getattr(action_config, "state_dim", None)
 
         # 更新 DiTConfig 到 diffusion_model_cfg
-        DiTConfig["num_layers"] = global_config.framework.qwenvl.num_vl_layers
+        self.interleave_self_attention = diffusion_model_cfg.get("interleave_self_attention", False)
+        num_vl_layers = global_config.framework.qwenvl.num_vl_layers
+        DiTConfig["num_layers"] = num_vl_layers * 2 if self.interleave_self_attention else num_vl_layers
         DiTConfig["input_embedding_dim"] = global_config.framework.qwenvl.vl_hidden_dim
         DiTConfig["num_attention_heads"] = DiTConfig["input_embedding_dim"] // DiTConfig["attention_head_dim"]
         diffusion_model_cfg.update(DiTConfig)
-        # diffusion_model_cfg["interleave_self_attention"] = False
         diffusion_model_cfg["cross_attention_dim"] = DiTConfig[
             "input_embedding_dim"
         ]  # should match vl embedding dim, but for some case we might want to change it for cross + self attention
         self.input_embedding_dim = global_config.framework.qwenvl.vl_hidden_dim
-        self.model = DiT(**diffusion_model_cfg)  # TODO better way is copy LLM from VLM
+        self.model = DiT(**diffusion_model_cfg)
         self.dit_out_hidden_size = self.input_embedding_dim
         self.action_dim = action_config.action_dim
         self.action_horizon = action_config.future_action_window_size + 1
@@ -287,8 +288,21 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         t_discretized = (t[:, 0, 0] * self.num_timestep_buckets).long()
         action_features = self.action_encoder(noisy_trajectory, t_discretized)
 
-        # Embed state
-        state_features = self.state_encoder(state).unsqueeze(1) if state is not None else None
+        # Embed state — normalize to [B, state_dim] before encoder, output to [B, 1, hidden]
+        state_features = None
+        if state is not None:
+            if state.dim() == 3:
+                if state.shape[1] == 1:
+                    state = state.squeeze(1)        # [B, 1, D] → [B, D]
+                else:
+                    state = state[:, -1, :]          # [B, T, D] → [B, D] (take last)
+            elif state.dim() > 3:
+                state = state.reshape(state.shape[0], -1)
+            state_features = self.state_encoder(state)  # [B, hidden]
+            if state_features.dim() == 2:
+                state_features = state_features.unsqueeze(1)  # [B, 1, hidden]
+            elif state_features.dim() == 4:
+                state_features = state_features.squeeze(1)   # [B, 1, 1, hidden] → [B, 1, hidden]
 
         # Maybe add position embedding.
         if self.config.add_pos_embed:
@@ -298,6 +312,10 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
 
         # state and action embedding along sequence dimension.
         future_tokens = self.future_tokens.weight.unsqueeze(0).expand(B, -1, -1)
+        if state_features is not None:
+            assert state_features.dim() == 3, f"state_features must be 3D, got {state_features.shape}"
+        assert future_tokens.dim() == 3, f"future_tokens must be 3D, got {future_tokens.shape}"
+        assert action_features.dim() == 3, f"action_features must be 3D, got {action_features.shape}"
         sa_embs = (
             torch.cat((state_features, future_tokens, action_features), dim=1)
             if state_features is not None
@@ -307,16 +325,26 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         # Encode timesteps
         temb = self.model.timestep_encoder(t_discretized)
 
-        # Layerwise cross-attention with vl_embs
+        # Layerwise cross-attention + self-attention with vl_embs
         model_output = sa_embs
+        vl_idx = 0
         for layer_idx, layer in enumerate(self.model.transformer_blocks):
-            model_output = layer(
-                hidden_states=model_output,
-                encoder_hidden_states=vl_embs_list[layer_idx],  # Use layer-specific vl_embs
-                temb=temb,
-            )
+            if self.interleave_self_attention and layer_idx % 2 == 1:
+                # Self-attention: DiT tokens attend to each other
+                model_output = layer(
+                    hidden_states=model_output,
+                    encoder_hidden_states=None,
+                    temb=temb,
+                )
+            else:
+                # Cross-attention: DiT tokens attend to VLM features
+                model_output = layer(
+                    hidden_states=model_output,
+                    encoder_hidden_states=vl_embs_list[vl_idx],
+                    temb=temb,
+                )
+                vl_idx += 1
 
-        # TODO miss self att and _process_output, but work well
         pred = self.action_decoder(model_output)
         pred_actions = pred[:, -actions.shape[1] :]
 
@@ -338,7 +366,20 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         num_steps = self.num_inference_timesteps
         dt = 1.0 / num_steps
 
-        state_features = self.state_encoder(state).unsqueeze(1) if state is not None else None
+        state_features = None
+        if state is not None:
+            if state.dim() == 3:
+                if state.shape[1] == 1:
+                    state = state.squeeze(1)        # [B, 1, D] → [B, D]
+                else:
+                    state = state[:, -1, :]          # [B, T, D] → [B, D] (take last)
+            elif state.dim() > 3:
+                state = state.reshape(state.shape[0], -1)
+            state_features = self.state_encoder(state)  # [B, hidden]
+            if state_features.dim() == 2:
+                state_features = state_features.unsqueeze(1)  # [B, 1, hidden]
+            elif state_features.dim() == 4:
+                state_features = state_features.squeeze(1)   # [B, 1, 1, hidden] → [B, 1, hidden]
 
         # Run denoising steps.
         for t in range(num_steps):
@@ -358,6 +399,10 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
                 action_features = action_features + pos_embs
 
             future_tokens = self.future_tokens.weight.unsqueeze(0).expand(batch_size, -1, -1)
+            if state_features is not None:
+                assert state_features.dim() == 3, f"state_features must be 3D, got {state_features.shape}"
+            assert future_tokens.dim() == 3, f"future_tokens must be 3D, got {future_tokens.shape}"
+            assert action_features.dim() == 3, f"action_features must be 3D, got {action_features.shape}"
             sa_embs = (
                 torch.cat((state_features, future_tokens, action_features), dim=1)
                 if state_features is not None
@@ -367,15 +412,25 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
             # Encode timestep
             temb = self.model.timestep_encoder(timesteps_tensor)
 
-            # Layerwise cross-attention with vl_embs_list
+            # Layerwise cross-attention + self-attention with vl_embs_list
             model_output = sa_embs
+            vl_idx = 0
             for layer_idx, layer in enumerate(self.model.transformer_blocks):
-                model_output = layer(
-                    hidden_states=model_output,
-                    encoder_hidden_states=vl_embs_list[layer_idx],
-                    temb=temb,
-                )
-            # TODO miss self att and _process_output
+                if self.interleave_self_attention and layer_idx % 2 == 1:
+                    # Self-attention: DiT tokens attend to each other
+                    model_output = layer(
+                        hidden_states=model_output,
+                        encoder_hidden_states=None,
+                        temb=temb,
+                    )
+                else:
+                    # Cross-attention: DiT tokens attend to VLM features
+                    model_output = layer(
+                        hidden_states=model_output,
+                        encoder_hidden_states=vl_embs_list[vl_idx],
+                        temb=temb,
+                    )
+                    vl_idx += 1
             pred = self.action_decoder(model_output)
             pred_velocity = pred[:, -self.action_horizon :]
 

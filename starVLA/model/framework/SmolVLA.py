@@ -89,6 +89,10 @@ class SmolVLA(baseframework):
         self.past_action_window_size = getattr(config.framework.action_model, "past_action_window_size", 0)
         self.chunk_len = self.past_action_window_size + 1 + self.future_action_window_size
 
+        # 读取 interleave_self_attention 配置，与 LayerwiseFM_ActionHeader 保持一致
+        diffusion_cfg = getattr(config.framework.action_model, "diffusion_model_cfg", None) or {}
+        self.interleave_self_attention = diffusion_cfg.get("interleave_self_attention", False)
+
 
     def _get_action_transformer_block_count(self):
         action_core = self.action_model
@@ -119,6 +123,10 @@ class SmolVLA(baseframework):
         return [available_hidden[index] for index in layer_indices]
 
     def _align_vlm_layers_to_action_layers(self, vlm_layers, action_layers):
+        # interleave 模式下只有半数 DiT block 做 cross-attention，对齐到一半即可
+        if self.interleave_self_attention:
+            action_layers = action_layers // 2
+
         if len(vlm_layers) == action_layers:
             return vlm_layers
 
