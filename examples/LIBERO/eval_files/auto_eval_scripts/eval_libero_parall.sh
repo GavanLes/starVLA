@@ -1,8 +1,8 @@
 ###########################################################################################
 # === Please modify the following paths according to your environment ===
-export LIBERO_HOME=/mnt/petrelfs/share/yejinhui/Projects/LIBERO  # Root directory of the LIBERO project
-export LIBERO_python=/mnt/petrelfs/share/yejinhui/Envs/miniconda3/envs/lerobot/bin/python  # Path to the Python environment
-export starVLA_python=/mnt/petrelfs/share/yejinhui/Envs/miniconda3/envs/starVLA/bin/python  # Path to the Python environment
+export LIBERO_HOME=/home/robot/yjw/LIBERO                            # Root directory of the LIBERO project
+export LIBERO_python=/home/robot/anaconda3/envs/libero/bin/python    # Python environment for LIBERO eval
+export starVLA_python=/home/robot/anaconda3/envs/starVLA/bin/python  # Python environment for starVLA server
 
 # === End of environment variable configuration ===
 export LIBERO_CONFIG_PATH=${LIBERO_HOME}/libero  # Path to LIBERO configuration files
@@ -21,10 +21,11 @@ run_index=$3
 # run_index=8
 ##### === variables for which evaluation to setup ===
 
-num_gpus=8
+num_gpus=1
 gpu_id=$((run_index % num_gpus))
 
 num_trials_per_task=50
+actions_per_chunk=10
 host="127.0.0.1"
 base_port=$((6450 + run_index))
 unnorm_key="franka"
@@ -56,6 +57,7 @@ ${LIBERO_python} ./examples/LIBERO/eval_files/eval_libero.py \
     --args.port $base_port \
     --args.task-suite-name "$task_suite_name" \
     --args.num-trials-per-task "$num_trials_per_task" \
+    --args.actions-per-chunk "$actions_per_chunk" \
     --args.video-out-path "$video_out_path"  \
     2>&1 | tee ${log_path}/${folder_name}.log
 

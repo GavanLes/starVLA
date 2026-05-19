@@ -1,8 +1,8 @@
 #!/bin/bash
 
-cd /mnt/petrelfs/yejinhui/Projects/starVLA
+cd ~/yjw/starVLA
 SCRIPT_PATH="./examples/LIBERO/eval_files/auto_eval_scripts/eval_libero_parall.sh"
-your_ckpt=/mnt/petrelfs/yejinhui/Projects/starVLA/results/Checkpoints/1226_libero4in1_qwen3oft/checkpoints/steps_50000_pytorch_model.pt
+your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_libero_stage2/checkpoints/steps_100000_pytorch_model.pt
 run_index_base=346
 
 #####################################################
