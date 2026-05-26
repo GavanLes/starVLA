@@ -121,6 +121,28 @@ class SmolVLMInterface(nn.Module):
 	def build_inputs(self, images, instructions, solutions=None, **kwargs):
 		return self.build_qwenvl_inputs(images=images, instructions=instructions, solutions=solutions, **kwargs)
 
+	def embed_images(self, pixel_values):
+		"""Embed images via get_image_features (handles vision_model + connector + reshaping)."""
+		return self.model.model.get_image_features(pixel_values)
+
+	def embed_text(self, instructions):
+		"""Tokenize text-only instructions (with chat template) and embed, returning (embeds, attention_mask)."""
+		messages = []
+		for instruction in instructions:
+			messages.append([{"role": "user", "content": [{"type": "text", "text": instruction}]}])
+		inputs = self.processor.apply_chat_template(
+			messages,
+			add_generation_prompt=True,
+			tokenize=True,
+			padding=True,
+			return_dict=True,
+			return_tensors="pt",
+		)
+		input_ids = inputs["input_ids"].to(self.model.device)
+		attention_mask = inputs["attention_mask"].to(self.model.device)
+		text_embeds = self.model.model.text_model.embed_tokens(input_ids)
+		return text_embeds, attention_mask
+
 	def forward(
 		self,
 		input_ids=None,

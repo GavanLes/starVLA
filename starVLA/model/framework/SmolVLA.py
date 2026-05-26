@@ -89,6 +89,16 @@ class SmolVLA(baseframework):
         self.past_action_window_size = getattr(config.framework.action_model, "past_action_window_size", 0)
         self.chunk_len = self.past_action_window_size + 1 + self.future_action_window_size
 
+        state_dim = getattr(config.framework.action_model, "state_dim", None)
+        if state_dim is not None:
+            self.state_proj = nn.Sequential(
+                nn.Linear(state_dim, 1024),
+                nn.ReLU(),
+                nn.Linear(1024, llm_hidden_size),
+            )
+        else:
+            self.state_proj = None
+
 
     def _get_action_transformer_block_count(self):
         action_core = self.action_model
@@ -128,6 +138,64 @@ class SmolVLA(baseframework):
         layer_indices = np.linspace(0, len(vlm_layers) - 1, action_layers)
         layer_indices = np.round(layer_indices).astype(int)
         return [vlm_layers[index] for index in layer_indices]
+
+    def _build_vlm_inputs_with_state(self, batch_images, instructions, state_tensor):
+        """Build VLM inputs_embeds with state injected as embedding tokens (following lerobot SmolVLA pattern).
+
+        Returns:
+            vlm_outputs: VLM forward outputs with hidden_states.
+        """
+        device = self.smolvlm_interface.model.device
+        B = len(batch_images)
+
+        # 1. Embed images via vision_model + connector
+        all_images = []
+        for img_list in batch_images:
+            for img in img_list:
+                all_images.append(self.smolvlm_interface._align_single_image(img))
+
+        img_inputs = self.smolvlm_interface.processor.image_processor(
+            all_images, return_tensors="pt"
+        )
+        pixel_values = img_inputs["pixel_values"].to(device=device, dtype=torch.bfloat16)
+        all_img_embeds = self.smolvlm_interface.embed_images(pixel_values)
+
+        V = len(batch_images[0])
+        N_patches = all_img_embeds.shape[1]
+        img_embeds = all_img_embeds.reshape(B, V * N_patches, -1)
+        img_mask = torch.ones(B, V * N_patches, dtype=torch.bool, device=device)
+
+        # 2. Embed text via tokenizer + embed_tokens
+        text_embeds, text_mask = self.smolvlm_interface.embed_text(instructions)
+        text_embeds = text_embeds.to(device=device, dtype=torch.bfloat16)
+        text_mask = text_mask.to(device=device)
+
+        # 3. Project state via state_proj
+        if state_tensor is not None and self.state_proj is not None:
+            s = torch.tensor(np.array(state_tensor), device=device, dtype=torch.bfloat16)
+            if s.dim() == 3:
+                s = s[:, -1, :]
+            state_embeds = self.state_proj(s).unsqueeze(1)  # [B, 1, D]
+            state_mask = torch.ones(B, 1, dtype=torch.bool, device=device)
+            embeds_list = [img_embeds, text_embeds, state_embeds]
+            mask_list = [img_mask, text_mask, state_mask]
+        else:
+            embeds_list = [img_embeds, text_embeds]
+            mask_list = [img_mask, text_mask]
+
+        inputs_embeds = torch.cat(embeds_list, dim=1)
+        attention_mask = torch.cat(mask_list, dim=1)
+
+        # 4. VLM forward with inputs_embeds (no pixel_values)
+        vlm_outputs = self.smolvlm_interface(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            pixel_values=None,
+            output_attentions=False,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        return vlm_outputs
         
 
     def forward(
@@ -145,23 +213,17 @@ class SmolVLA(baseframework):
             dict:
                 action_loss (torch.Tensor): Scalar diffusion noise prediction loss.
         """
-        batch_images = [example["image"] for example in examples]  #  [B，[PLT]]
-        instructions = [example["lang"] for example in examples]  # [B, str]
-        actions = [example["action"] for example in examples]  # label [B， len, 7]
-        
-        state = [example["state"] for example in examples] if "state" in examples[0] else None  # [B, 1, state_dim]
-        # Step 1: SmolVLM input format
-        qwen_inputs = self.smolvlm_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
+        batch_images = [example["image"] for example in examples]
+        instructions = [example["lang"] for example in examples]
+        actions = [example["action"] for example in examples]
+
+        state = [example["state"] for example in examples] if "state" in examples[0] else None
+
         vlm_context = torch.no_grad() if self.train_expert_only else contextlib.nullcontext()
         with vlm_context:
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                qwenvl_outputs = self.smolvlm_interface(
-                    **qwen_inputs,
-                    output_attentions=False,
-                    output_hidden_states=True,
-                    return_dict=True,
-                )
-            all_hidden = qwenvl_outputs.hidden_states
+                vlm_outputs = self._build_vlm_inputs_with_state(batch_images, instructions, state)
+            all_hidden = vlm_outputs.hidden_states
             vl_embs_list = self._select_vlm_hidden_states(all_hidden)
             action_device = self._get_action_device()
             action_dtype = self._get_action_dtype()
@@ -169,71 +231,49 @@ class SmolVLA(baseframework):
             vl_embs_list = self._align_vlm_layers_to_action_layers(vlm_layers=vl_embs_list, action_layers=self._get_action_transformer_block_count())
             base_hidden = vl_embs_list[-1]
 
-        # Step 4: Action Expert Forward and Loss
-        # 标签对齐：取最后 chunk_len 段
         actions = torch.tensor(
             np.array(actions), device=action_device, dtype=action_dtype
-        )  # [B, T_full, action_dim]
-        actions_target = actions[:, -(self.future_action_window_size + 1) :, :]  # (B, chunk_len, action_dim)
+        )
+        actions_target = actions[:, -(self.future_action_window_size + 1) :, :]
 
         repeated_diffusion_steps = int(getattr(self.config.trainer, "repeated_diffusion_steps", 1) or 1)
         if repeated_diffusion_steps > 1:
             actions_target = actions_target.repeat(repeated_diffusion_steps, 1, 1)
             vl_embs_list = [h.repeat(repeated_diffusion_steps, 1, 1) for h in vl_embs_list]
-            if state is not None:
-                state = torch.tensor(np.array(state), device=action_device, dtype=action_dtype)
-                state = state.repeat(repeated_diffusion_steps, 1, 1)
-        else:
-            if state is not None:
-                state = torch.tensor(np.array(state), device=action_device, dtype=action_dtype)
 
-        action_loss = self.action_model(vl_embs_list, actions_target, state)  # (B, chunk_len, action_dim)
-
-
+        action_loss = self.action_model(vl_embs_list, actions_target)
 
         return {"action_loss": action_loss}
 
     @torch.inference_mode()
-    def predict_action( # TODO align  predict_action with forward, make api more flexible
+    def predict_action(
         self,
         examples: List[dict] = None,
         **kwargs: str,
     ) -> np.ndarray:
         """
-        推理：单次前向直接回归未来动作（无扩散采样）。
-
-        Steps:
-          1. Resize images to training resolution (if specified)
-          2. Encode with QwenVL (hidden states retained)
-          6. Return normalized action trajectory
+        Run inference: predict future actions via flow-matching denoising.
 
         Returns:
             dict:
-                normalized_actions (np.ndarray): Shape [B, T, action_dim], diffusion-sampled normalized actions.
+                normalized_actions (np.ndarray): Shape [B, T, action_dim].
         """
         if type(examples) is not list:
             examples = [examples]
         from deployment.model_server.tools.image_tools import to_pil_preserve
-        batch_images = [to_pil_preserve(example["image"]) for example in examples]  #  [B，[PLT]]
-        instructions = [example["lang"] for example in examples]  # [B, str]
-    
-        state = [example["state"] for example in examples] if "state" in examples[0] else None  # [B, 1, state_dim]
-        
+        batch_images = [to_pil_preserve(example["image"]) for example in examples]
+        instructions = [example["lang"] for example in examples]
+
+        state = [example["state"] for example in examples] if "state" in examples[0] else None
+
         train_obs_image_size = getattr(self.config.datasets.vla_data, "image_size", None)
         if train_obs_image_size:
             batch_images = resize_images(batch_images, target_size=train_obs_image_size)
-    
-        # Step 1: SmolVLM input format
-        qwen_inputs = self.smolvlm_interface.build_qwenvl_inputs(images=batch_images, instructions=instructions)
+
         with torch.inference_mode():
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                qwenvl_outputs = self.smolvlm_interface(
-                    **qwen_inputs,
-                    output_attentions=False,
-                    output_hidden_states=True,
-                    return_dict=True,
-                )
-            all_hidden = qwenvl_outputs.hidden_states
+                vlm_outputs = self._build_vlm_inputs_with_state(batch_images, instructions, state)
+            all_hidden = vlm_outputs.hidden_states
             vl_embs_list = self._select_vlm_hidden_states(all_hidden)
             action_device = self._get_action_device()
             action_dtype = self._get_action_dtype()
@@ -241,8 +281,7 @@ class SmolVLA(baseframework):
             vl_embs_list = self._align_vlm_layers_to_action_layers(vlm_layers=vl_embs_list, action_layers=self._get_action_transformer_block_count())
             _ = vl_embs_list[-1]
 
-        state = torch.from_numpy(np.array(state)).to(action_device, dtype=action_dtype) if state is not None else None
-        pred_actions = self.action_model.predict_action(vl_embs_list, state)  # (B, chunk_len, action_dim)
+        pred_actions = self.action_model.predict_action(vl_embs_list)
 
         normalized_actions = pred_actions.detach().to(torch.float32).cpu().numpy()
         return {"normalized_actions": normalized_actions}

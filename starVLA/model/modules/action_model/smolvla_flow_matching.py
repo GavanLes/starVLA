@@ -17,9 +17,9 @@ class SmolVLAFlowMatching(nn.Module):
 		self.config = config
 		self.model = get_action_model(config=config)
 
-	def forward(self, vl_embs_list: list, actions: torch.Tensor, state: torch.Tensor = None):
-		return self.model(vl_embs_list=vl_embs_list, actions=actions, state=state)
+	def forward(self, vl_embs_list: list, actions: torch.Tensor):
+		return self.model(vl_embs_list=vl_embs_list, actions=actions)
 
 	@torch.inference_mode()
-	def predict_action(self, vl_embs_list: list, state: torch.Tensor = None):
-		return self.model.predict_action(vl_embs_list=vl_embs_list, state=state)
+	def predict_action(self, vl_embs_list: list):
+		return self.model.predict_action(vl_embs_list=vl_embs_list)

@@ -15,11 +15,11 @@ set -euo pipefail
 #Framework_name=SmolVLA
 #freeze_module_list=''
 #base_vlm=playground/Pretrained_models/SmolVLM2-500M-Video-Instruct
-config_yaml=./examples/LIBERO/train_files/smolvla_libero_stage2.yaml
+config_yaml=./examples/LIBERO/train_files/smolvla_state_in_vlm.yaml
 libero_data_root=playground/Datasets/LEROBOT_LIBERO_DATA/libero
 data_mix=libero_all
 run_root_dir=./results/Checkpoints
-run_id=smolvla_libero_stage2
+run_id=smolvla_state_in_vlm
 # VLM training switches
 # true  = freeze the whole VLM and only train the action expert
 train_expert_only=true
