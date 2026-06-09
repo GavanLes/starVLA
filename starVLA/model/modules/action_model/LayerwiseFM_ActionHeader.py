@@ -3,6 +3,7 @@
 # Modification: [rm and add some connect adapter to match with starVLA, e.g., "rm "].
 
 
+import math
 from dataclasses import dataclass, field
 
 import torch
@@ -17,6 +18,11 @@ from starVLA.model.modules.action_model.flow_matching_head.action_encoder import
     swish,
 )
 from starVLA.model.modules.action_model.flow_matching_head.cross_attention_dit import DiT
+from starVLA.model.modules.action_model.flow_matching_head.semantic_router import (
+    DiTLayerwiseSemanticRouter,
+    SemanticRouterConfig,
+    build_router_config,
+)
 
 # TODO try to meger DiT Modules with follow_match_head, they are just the same arch, but diff loss, use diffusers package will be simple
 
@@ -259,6 +265,114 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         self.beta_dist = Beta(action_config.noise_beta_alpha, action_config.noise_beta_beta)
         self.num_timestep_buckets = action_config.num_timestep_buckets
         self.config = action_config
+        # ===== Semantic Router =====
+        router_cfg = build_router_config(action_config)
+        self.use_semantic_router = router_cfg.use_semantic_router
+        if self.use_semantic_router:
+            num_vlm_layers = global_config.framework.qwenvl.num_vl_layers
+            self.semantic_router = DiTLayerwiseSemanticRouter(
+                hidden_dim=self.input_embedding_dim,
+                num_vlm_layers=num_vlm_layers,
+                config=router_cfg,
+            )
+        else:
+            self.semantic_router = None
+
+        self.register_buffer("last_router_weights", None)
+        self._task_names = None
+
+        # ===== S2 Per-Block Static Routing (Semantic Routing style) =====
+        s2_cfg = getattr(action_config, "s2_routing", None)
+        self.use_s2_routing = getattr(s2_cfg, "use_s2_routing", False) if s2_cfg is not None else False
+        self.use_residual_s2 = getattr(s2_cfg, "residual", False) if s2_cfg is not None else False
+        self.entropy_weight = getattr(s2_cfg, "entropy_weight", 5e-4) if s2_cfg is not None else 5e-4
+        if self.use_s2_routing:
+            num_dit_layers = len(self.model.transformer_blocks)
+            num_vlm_layers = global_config.framework.qwenvl.num_vl_layers
+            s2_init = getattr(s2_cfg, "identity_init_scale", 1.0) if s2_cfg is not None else 1.0
+            self.block_gate = nn.Parameter(torch.zeros(num_dit_layers, num_vlm_layers))
+            # Identity init: block i prefers VLM layer i
+            for i in range(num_dit_layers):
+                self.block_gate.data[i, i] = s2_init
+            if self.use_residual_s2:
+                alpha_init = getattr(s2_cfg, "alpha_init", 0.01) if s2_cfg is not None else 0.01
+                alpha_raw_init = math.log(alpha_init / (1 - alpha_init))
+                self.block_alpha = nn.Parameter(torch.full((num_dit_layers,), alpha_raw_init))
+                self.block_layernorm = nn.LayerNorm(self.input_embedding_dim)
+            else:
+                self.block_alpha = None
+                self.block_layernorm = None
+        else:
+            self.block_gate = None
+            self.block_alpha = None
+            self.block_layernorm = None
+
+
+
+    def set_task_metadata(self, task_names: list):
+        self._task_names = task_names
+
+    def get_last_router_weights(self):
+        return self.last_router_weights
+
+    def _compute_router_features(self, vl_embs_list, state_features, timestep_emb):
+        last_vlm = vl_embs_list[-1]
+        task_pooled = last_vlm.mean(dim=1)
+        state_pooled = state_features.squeeze(1) if state_features is not None else None
+        return task_pooled, state_pooled, timestep_emb
+
+    def _s2_route(self, vl_embs_list):
+        """Per-block static routing: learnable weight per (DiT block, VLM layer).
+
+        Standard mode: fused_d = sum_j softmax(gate[d,j]) * vl_emb[j]
+        Residual mode: fused_d = vl_emb[d] + sigmoid(alpha[d]) * sum_j softmax(gate[d,j]) * LN(vl_emb[j])
+        """
+        w = F.softmax(self.block_gate, dim=-1)  # [D, L]
+        B, S, D = vl_embs_list[0].shape
+        fused_list = []
+        if self.use_residual_s2 and self.block_alpha is not None:
+            for d in range(len(self.model.transformer_blocks)):
+                h_d = vl_embs_list[d]  # 1:1 path, always preserved
+                vl_norm = torch.stack(
+                    [self.block_layernorm(vl_embs_list[j]) for j in range(len(vl_embs_list))], dim=1
+                )  # [B, L, S, D]
+                w_d = w[d].view(1, -1, 1, 1)  # [1, L, 1, 1]
+                residual = (vl_norm * w_d).sum(dim=1)  # [B, S, D]
+                alpha_d = torch.sigmoid(self.block_alpha[d])
+                fused_d = h_d + alpha_d * residual
+                fused_list.append(fused_d)
+        else:
+            vl_stack = torch.stack(vl_embs_list, dim=1)  # [B, L, S, D]
+            for d in range(len(self.model.transformer_blocks)):
+                w_d = w[d].unsqueeze(0).unsqueeze(-1).unsqueeze(-1)  # [1, L, 1, 1]
+                fused_d = (vl_stack * w_d).sum(dim=1)  # [B, S, D]
+                fused_list.append(fused_d)
+        self.last_router_weights = w.detach()
+        return fused_list
+
+    def _route_or_passthrough(self, vl_embs_list, temb, state_features):
+        # S2 routing: per-block static weights
+        if self.use_s2_routing and self.block_gate is not None:
+            return self._s2_route(vl_embs_list)
+
+        # Semantic router: global dynamic weights
+        if self.use_semantic_router and self.semantic_router is not None:
+            task_pooled, state_emb, timestep_emb = self._compute_router_features(
+                vl_embs_list, state_features, temb
+            )
+            fused, weights = self.semantic_router.route_vlm_features(
+                vl_embs_list,
+                task_pooled=task_pooled,
+                timestep_emb=timestep_emb,
+                state_emb=state_emb,
+            )
+            self.last_router_weights = weights.detach()
+            num_dit_layers = len(self.model.transformer_blocks)
+            return [fused] * num_dit_layers
+
+        # Passthrough: 1:1 binding
+        self.last_router_weights = None
+        return vl_embs_list
 
     def sample_time(self, batch_size, device, dtype):
         sample = self.beta_dist.sample([batch_size]).to(device, dtype=dtype)
@@ -307,12 +421,14 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         # Encode timesteps
         temb = self.model.timestep_encoder(t_discretized)
 
-        # Layerwise cross-attention with vl_embs
+        # Router: fuse VLM layers (or keep 1:1 binding when disabled)
+        vl_for_dit = self._route_or_passthrough(vl_embs_list, temb, state_features)
+
         model_output = sa_embs
         for layer_idx, layer in enumerate(self.model.transformer_blocks):
             model_output = layer(
                 hidden_states=model_output,
-                encoder_hidden_states=vl_embs_list[layer_idx],  # Use layer-specific vl_embs
+                encoder_hidden_states=vl_for_dit[layer_idx],
                 temb=temb,
             )
 
@@ -321,7 +437,15 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         pred_actions = pred[:, -actions.shape[1] :]
 
         # Slice out only the action portion of pred and target.
-        loss = ((pred_actions - velocity) ** 2).mean()
+        flow_loss = ((pred_actions - velocity) ** 2).mean()
+        if self.use_residual_s2 and self.block_gate is not None:
+            w = F.softmax(self.block_gate, dim=-1)
+            log_w = F.log_softmax(self.block_gate, dim=-1)
+            entropy = -(w * log_w).sum(dim=-1).mean()
+            loss = flow_loss + self.entropy_weight * entropy
+            self._last_entropy = entropy.detach()
+        else:
+            loss = flow_loss
         return loss
 
     @torch.no_grad()
@@ -339,6 +463,7 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
         dt = 1.0 / num_steps
 
         state_features = self.state_encoder(state).unsqueeze(1) if state is not None else None
+        all_step_weights = []
 
         # Run denoising steps.
         for t in range(num_steps):
@@ -367,12 +492,14 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
             # Encode timestep
             temb = self.model.timestep_encoder(timesteps_tensor)
 
-            # Layerwise cross-attention with vl_embs_list
+            # Router: fuse VLM layers (or keep 1:1 binding when disabled)
+            vl_for_dit = self._route_or_passthrough(vl_embs_list, temb, state_features)
+
             model_output = sa_embs
             for layer_idx, layer in enumerate(self.model.transformer_blocks):
                 model_output = layer(
                     hidden_states=model_output,
-                    encoder_hidden_states=vl_embs_list[layer_idx],
+                    encoder_hidden_states=vl_for_dit[layer_idx],
                     temb=temb,
                 )
             # TODO miss self att and _process_output
@@ -381,7 +508,24 @@ class LayerwiseFlowmatchingActionHead(nn.Module):
 
             # Euler integration
             actions = actions + dt * pred_velocity
+
+            if self.use_semantic_router and self.last_router_weights is not None:
+                all_step_weights.append(self.last_router_weights)
+        if all_step_weights:
+            self.last_router_weights = torch.stack(all_step_weights, dim=0).mean(dim=0)
+
         return actions
+
+
+    def save_router_analysis(self, save_dir: str):
+        import os, numpy as np
+        os.makedirs(save_dir, exist_ok=True)
+        if self.last_router_weights is not None:
+            np.save(os.path.join(save_dir, "router_weights.npy"),
+                    self.last_router_weights.cpu().numpy())
+        if self._task_names is not None:
+            np.save(os.path.join(save_dir, "task_names.npy"),
+                    np.array(self._task_names))
 
     @property
     def device(self):

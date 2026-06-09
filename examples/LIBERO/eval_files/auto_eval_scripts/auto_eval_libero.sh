@@ -2,7 +2,7 @@
 
 cd ~/yjw/starVLA
 SCRIPT_PATH="./examples/LIBERO/eval_files/auto_eval_scripts/eval_libero_parall.sh"
-your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_state_in_vlm/checkpoints/steps_250000_pytorch_model.pt
+your_ckpt=/home/robot/yjw/starVLA/results/Checkpoints/smolvla_state_in_vlm_residual_s2/checkpoints/steps_200000_pytorch_model.pt
 #####################################################
 task_suite_name=libero_10 # align with your model
 run_index=$((run_index_base + 0))

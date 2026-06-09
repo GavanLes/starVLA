@@ -112,9 +112,8 @@ class SmolVLMInterface(nn.Module):
 			messages,
 			add_generation_prompt=True,
 			tokenize=True,
-			padding=True,
 			return_dict=True,
-			return_tensors="pt",
+			processor_kwargs={"padding": True, "return_tensors": "pt"},
 		)
 		return inputs.to(self.model.device, dtype=torch.bfloat16)
 
@@ -122,8 +121,18 @@ class SmolVLMInterface(nn.Module):
 		return self.build_qwenvl_inputs(images=images, instructions=instructions, solutions=solutions, **kwargs)
 
 	def embed_images(self, pixel_values):
-		"""Embed images via get_image_features (handles vision_model + connector + reshaping)."""
-		return self.model.model.get_image_features(pixel_values)
+		"""Embed images via get_image_features (handles vision_model + connector + reshaping).
+
+		Returns a plain tensor [N, patches, hidden_dim] regardless of transformers version.
+		Older versions wrap the result in BaseModelOutput and put the projected features in
+		pooler_output; newer versions return a tensor directly or put it in last_hidden_state.
+		"""
+		output = self.model.model.get_image_features(pixel_values)
+		if hasattr(output, "pooler_output") and output.pooler_output is not None:
+			return output.pooler_output
+		if hasattr(output, "last_hidden_state"):
+			return output.last_hidden_state
+		return output
 
 	def embed_text(self, instructions):
 		"""Tokenize text-only instructions (with chat template) and embed, returning (embeds, attention_mask)."""
@@ -134,9 +143,8 @@ class SmolVLMInterface(nn.Module):
 			messages,
 			add_generation_prompt=True,
 			tokenize=True,
-			padding=True,
 			return_dict=True,
-			return_tensors="pt",
+			processor_kwargs={"padding": True, "return_tensors": "pt"},
 		)
 		input_ids = inputs["input_ids"].to(self.model.device)
 		attention_mask = inputs["attention_mask"].to(self.model.device)

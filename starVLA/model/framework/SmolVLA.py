@@ -242,8 +242,10 @@ class SmolVLA(baseframework):
             vl_embs_list = [h.repeat(repeated_diffusion_steps, 1, 1) for h in vl_embs_list]
 
         action_loss = self.action_model(vl_embs_list, actions_target)
-
-        return {"action_loss": action_loss}
+        result = {"action_loss": action_loss}
+        if hasattr(self.action_model, '_last_entropy'):
+            result["entropy_loss"] = self.action_model._last_entropy
+        return result
 
     @torch.inference_mode()
     def predict_action(

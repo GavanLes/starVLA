@@ -229,6 +229,10 @@ class baseframework(PreTrainedModel):
         # logger.info(f"Loading model weights from `{pretrained_checkpoint}`")
         model_keys = set(FrameworkModel.state_dict().keys())
         checkpoint_keys = set(model_state_dict.keys())
+        # Drop transient diagnostic buffers that may be None in the current model
+        # but were saved as tensors during training/inference.
+        model_state_dict.pop("action_model.model.last_router_weights", None)
+
         try:
             FrameworkModel.load_state_dict(model_state_dict, strict=True)
         except RuntimeError as e:
